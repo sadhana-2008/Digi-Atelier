@@ -52,4 +52,4 @@ All rights reserved. This repository and its entire conceptual design, assets, a
 
 By default, this project does not include an open-source license. No one has permission to copy, distribute, modify, or reuse any part of this work for commercial or personal projects. Visitors are strictly limited to viewing the source code for educational and reference purposes only.
 
-Digi-Atelier is the first architectural build of the Digital Habitat vision. Handcrafted with 💖 by Sadhana-2008.
+Digi-Atelier is the first architectural build of the Digital Habitat vision. Handcrafted with 💖 by Sadhana Srinivasan.
