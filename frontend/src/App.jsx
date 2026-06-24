@@ -1,21 +1,39 @@
 import { useRef, useState } from 'react'
 
 function App() {
+  // State to track currently selected room layout anchor point
   const [selectedAnchor, setSelectedAnchor] = useState(null)
+  
+  // State to track active coordinate position of the desk asset
   const [tablePosition, setTablePosition] = useState({ top: '61.25%', left: '35%' })
+  
+  // State to track if user is currently dragging the desk
   const [isDragging, setIsDragging] = useState(false)
+  
+  // State to hold pointer offset relative to desk anchor center during dragging
   const [dragOffset, setDragOffset] = useState({ x: 0, y: 0 })
+  
+  // Ref referencing the main parent room viewport container element
   const roomRef = useRef(null)
 
+  // State to track if the close-up tabletop zoom interface overlay is active
+  const [isDeskZoomed, setIsDeskZoomed] = useState(false)
+
+  // Ref to track if the desk was actively dragged during pointer interaction
+  const hasDraggedRef = useRef(false)
+
+  // Predefined coordinates for desk snap points in room percentages
   const snapPoints = [
     { id: 'T-Left', top: 61.25, left: 35 },
     { id: 'T-Right', top: 61.25, left: 65 },
   ]
 
+  // Event handler for initiating desk drag
   const handlePointerDown = (event) => {
     event.preventDefault()
     event.currentTarget.setPointerCapture(event.pointerId)
     setIsDragging(true)
+    hasDraggedRef.current = false // Reset drag flag on down
 
     const roomRect = roomRef.current?.getBoundingClientRect()
     if (!roomRect) return
@@ -29,8 +47,10 @@ function App() {
     })
   }
 
+  // Event handler for updating desk position during drag
   const handlePointerMove = (event) => {
     if (!isDragging) return
+    hasDraggedRef.current = true // Set drag flag on move
 
     const roomRect = roomRef.current?.getBoundingClientRect()
     if (!roomRect) return
@@ -47,6 +67,7 @@ function App() {
     })
   }
 
+  // Event handler for ending desk drag and snapping to nearest target
   const handlePointerUp = (event) => {
     if (!isDragging) return
 
@@ -144,6 +165,11 @@ function App() {
           onPointerMove={handlePointerMove}
           onPointerUp={handlePointerUp}
           onPointerCancel={handlePointerUp}
+          onClick={() => {
+            if (!hasDraggedRef.current) {
+              setIsDeskZoomed(true)
+            }
+          }}
           style={{
             position: 'absolute',
             top: tablePosition.top,
@@ -231,6 +257,135 @@ function App() {
           </button>
         ))}
       </div>
+      {/* 2.5D Close-up Tabletop Zoom Overlay */}
+      {isDeskZoomed && (
+        <div className="fixed inset-0 backdrop-blur-md bg-black/30 flex flex-col items-center justify-center z-50 gap-6">
+          {/* Close Button to return to main room view */}
+          <button 
+            onClick={() => setIsDeskZoomed(false)} 
+            className="absolute top-6 right-6 text-5xl font-light text-white/80 hover:text-white hover:scale-110 transition-all cursor-pointer bg-transparent border-none outline-none select-none"
+            aria-label="Close zoom view"
+          >
+            &times;
+          </button>
+          
+          <div className="flex flex-col items-end gap-6">
+            {/* Hand-Drawn / Classic Oval Tabletop Container */}
+            <div 
+              className="w-[600px] h-[400px] bg-[#f4ebd0] rounded-full border-4 border-[#5c4b3f] relative shadow-2xl overflow-hidden"
+            >
+              <svg
+                viewBox="0 0 600 400"
+                width="100%"
+                height="100%"
+                style={{ overflow: 'visible' }}
+              >
+                {/* Tabletop Surface (A large detailed perspective trapezoid matching the shallow room angle) */}
+                <polygon 
+                  points="60,60 540,60 590,300 10,300" 
+                  fill="#fdfbf7" 
+                  stroke="#5c4b3f" 
+                  strokeWidth="4" 
+                  strokeLinejoin="round" 
+                />
+
+                {/* Tabletop Front Edge (Thickness) */}
+                <polygon 
+                  points="10,300 590,300 590,325 10,325" 
+                  fill="#f3e8e0" 
+                  stroke="#5c4b3f" 
+                  strokeWidth="4" 
+                  strokeLinejoin="round" 
+                />
+                {/* Highlight line just under the lip */}
+                <line x1="12" y1="302" x2="588" y2="302" stroke="#ffffff" strokeWidth="2" />
+
+                {/* // Future close-up tabletop assets and interior snap targets go here */}
+
+                {/* Structured Grid of 6 Snap Points (Top row of 3, Bottom row of 3) */}
+                {[
+                  { id: 'CU-TopLeft', x: 150, y: 130, label: 'Top Left' },
+                  { id: 'CU-TopCenter', x: 300, y: 130, label: 'Top Center' },
+                  { id: 'CU-TopRight', x: 450, y: 130, label: 'Top Right' },
+                  { id: 'CU-BottomLeft', x: 130, y: 240, label: 'Bottom Left' },
+                  { id: 'CU-BottomCenter', x: 300, y: 240, label: 'Bottom Center' },
+                  { id: 'CU-BottomRight', x: 470, y: 240, label: 'Bottom Right' },
+                ].map((pt) => (
+                  <g key={pt.id} className="group cursor-pointer select-none">
+                    {/* Hover highlight circle */}
+                    <circle 
+                      cx={pt.x} 
+                      cy={pt.y} 
+                      r="20" 
+                      fill="rgba(92, 75, 63, 0.05)" 
+                      className="opacity-0 group-hover:opacity-100 transition-opacity duration-200" 
+                    />
+                    {/* Grid crosshairs */}
+                    <line 
+                      x1={pt.x - 24} 
+                      y1={pt.y} 
+                      x2={pt.x + 24} 
+                      y2={pt.y} 
+                      stroke="#5c4b3f" 
+                      strokeWidth="1.5" 
+                      strokeDasharray="3 3" 
+                      className="opacity-50 group-hover:opacity-85 transition-opacity" 
+                    />
+                    <line 
+                      x1={pt.x} 
+                      y1={pt.y - 24} 
+                      x2={pt.x} 
+                      y2={pt.y + 24} 
+                      stroke="#5c4b3f" 
+                      strokeWidth="1.5" 
+                      strokeDasharray="3 3" 
+                      className="opacity-50 group-hover:opacity-85 transition-opacity" 
+                    />
+                    {/* Target outer dashed circle */}
+                    <circle 
+                      cx={pt.x} 
+                      cy={pt.y} 
+                      r="14" 
+                      fill="none" 
+                      stroke="#5c4b3f" 
+                      strokeWidth="1.5" 
+                      strokeDasharray="4 2" 
+                      className="opacity-60 group-hover:opacity-100 group-hover:scale-110 origin-center transition-all duration-200" 
+                      style={{ transformOrigin: `${pt.x}px ${pt.y}px` }}
+                    />
+                    {/* Center plus marker */}
+                    <path 
+                      d={`M ${pt.x - 5} ${pt.y} L ${pt.x + 5} ${pt.y} M ${pt.x} ${pt.y - 5} L ${pt.x} ${pt.y + 5}`} 
+                      stroke="#5c4b3f" 
+                      strokeWidth="2" 
+                      className="opacity-80 group-hover:opacity-100 transition-opacity" 
+                    />
+                  </g>
+                ))}
+              </svg>
+            </div>
+
+            {/* Action Buttons floating at the bottom right beneath the oval ring layout */}
+            <div className="flex gap-4">
+              <button 
+                onClick={() => setIsDeskZoomed(false)}
+                className="px-6 py-2 bg-[#fdfbf7] border-2 border-[#5c4b3f] text-[#5c4b3f] font-medium rounded-[12px_8px_12px_10px] shadow-[3px_3px_0px_#5c4b3f] hover:shadow-[1px_1px_0px_#5c4b3f] hover:translate-x-[2px] hover:translate-y-[2px] active:translate-x-[3px] active:translate-y-[3px] transition-all cursor-pointer font-mono text-sm"
+              >
+                Cancel
+              </button>
+              <button 
+                onClick={() => {
+                  // Save close-up table state or close the view
+                  setIsDeskZoomed(false)
+                }}
+                className="px-6 py-2 bg-[#f3e8e0] border-2 border-[#5c4b3f] text-[#5c4b3f] font-semibold rounded-[8px_12px_10px_12px] shadow-[3px_3px_0px_#5c4b3f] hover:shadow-[1px_1px_0px_#5c4b3f] hover:translate-x-[2px] hover:translate-y-[2px] active:translate-x-[3px] active:translate-y-[3px] transition-all cursor-pointer font-mono text-sm"
+              >
+                Save
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
