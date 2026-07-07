@@ -40,6 +40,22 @@ function App() {
   const [lampDragOffset, setLampDragOffset] = useState({ x: 0, y: 0 })
   const zoomSvgRef = useRef(null)
 
+  // --- Phase 4: Book Persistent Global State ---
+  // savedBookPosition defaults to index 4 (BC – bottom-center), away from lamp default (2=TR)
+  const [savedBookPosition, setSavedBookPosition] = useState(4)
+  const [savedBookText, setSavedBookText] = useState('')
+
+  // --- Phase 4: Book Session State (active only inside zoom overlay) ---
+  const [bookPosition, setBookPosition] = useState(4)
+  const [isBookDragging, setIsBookDragging] = useState(false)
+  const bookHasDraggedRef = useRef(false)
+  const bookDragStartRef = useRef({ x: 0, y: 0 })
+  const [bookDragOffset, setBookDragOffset] = useState({ x: 0, y: 0 })
+
+  // --- Phase 4: Note Modal State ---
+  const [isBookModalOpen, setIsBookModalOpen] = useState(false)
+  const [currentBookText, setCurrentBookText] = useState('')
+
   // ── Normalized Snap Grid ──────────────────────────────────────────────────
   // Each snap point is defined as (xFrac, yFrac) where:
   //   xFrac  0.0 = left edge of tabletop,  1.0 = right edge
@@ -89,22 +105,28 @@ function App() {
     { id: 'T-Right', top: 61.25, left: 65 },
   ]
 
-  // --- Zoom Open Handler: Initialize lamp session from saved state ---
+  // --- Zoom Open Handler: Initialize lamp + book session from saved state ---
   const openZoom = useCallback(() => {
     setLampPosition(savedLampPosition)
     setIsLampOn(savedIsLampOn)
     setIsLampDragging(false)
     lampHasDraggedRef.current = false
     setLampDragOffset({ x: 0, y: 0 })
+    // Book session init
+    setBookPosition(savedBookPosition)
+    setIsBookDragging(false)
+    bookHasDraggedRef.current = false
+    setBookDragOffset({ x: 0, y: 0 })
     setIsDeskZoomed(true)
-  }, [savedLampPosition, savedIsLampOn])
+  }, [savedLampPosition, savedIsLampOn, savedBookPosition])
 
-  // --- Zoom Save Handler: Commit session state to saved globals ---
+  // --- Zoom Save Handler: Commit lamp + book session state to saved globals ---
   const handleZoomSave = useCallback(() => {
     setSavedLampPosition(lampPosition)
     setSavedIsLampOn(isLampOn)
+    setSavedBookPosition(bookPosition)
     setIsDeskZoomed(false)
-  }, [lampPosition, isLampOn])
+  }, [lampPosition, isLampOn, bookPosition])
 
   // --- Zoom Cancel Handler: Discard session changes, revert to saved ---
   const handleZoomCancel = useCallback(() => {
@@ -183,6 +205,70 @@ function App() {
     lampHasDraggedRef.current = false
     setLampDragOffset({ x: 0, y: 0 })
   }, [isLampDragging, lampPosition, lampDragOffset, closeUpSnapPoints])
+
+  // --- Phase 4: Book Drag Handlers inside the Zoom SVG ---
+  const handleBookPointerDown = useCallback((event) => {
+    event.preventDefault()
+    event.stopPropagation()
+    event.currentTarget.setPointerCapture(event.pointerId)
+    setIsBookDragging(true)
+    bookHasDraggedRef.current = false
+    const svgPt = svgPointFromEvent(event)
+    bookDragStartRef.current = svgPt
+    setBookDragOffset({ x: 0, y: 0 })
+  }, [svgPointFromEvent])
+
+  const handleBookPointerMove = useCallback((event) => {
+    if (!isBookDragging) return
+    event.preventDefault()
+    event.stopPropagation()
+    bookHasDraggedRef.current = true
+    const svgPt = svgPointFromEvent(event)
+    setBookDragOffset({
+      x: svgPt.x - bookDragStartRef.current.x,
+      y: svgPt.y - bookDragStartRef.current.y,
+    })
+  }, [isBookDragging, svgPointFromEvent])
+
+  const handleBookPointerUp = useCallback((event) => {
+    if (!isBookDragging) return
+    event.preventDefault()
+    event.stopPropagation()
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId)
+    }
+    if (bookHasDraggedRef.current) {
+      // Find nearest snap point to drop position
+      const currentSnap = closeUpSnapPoints[bookPosition]
+      const dropX = currentSnap.x + bookDragOffset.x
+      const dropY = currentSnap.y + bookDragOffset.y
+      let nearestIdx = 0
+      let shortestDist = Number.POSITIVE_INFINITY
+      closeUpSnapPoints.forEach((pt, idx) => {
+        const dist = Math.sqrt((dropX - pt.x) ** 2 + (dropY - pt.y) ** 2)
+        if (dist < shortestDist) { shortestDist = dist; nearestIdx = idx }
+      })
+      setBookPosition(nearestIdx)
+    } else {
+      // Pure click: open note modal
+      setCurrentBookText(savedBookText)
+      setIsBookModalOpen(true)
+    }
+    setIsBookDragging(false)
+    bookHasDraggedRef.current = false
+    setBookDragOffset({ x: 0, y: 0 })
+  }, [isBookDragging, bookPosition, bookDragOffset, closeUpSnapPoints, savedBookText])
+
+  // --- Phase 4: Note Modal Handlers ---
+  const handleNoteModalSave = useCallback(() => {
+    setSavedBookText(currentBookText)
+    setIsBookModalOpen(false)
+  }, [currentBookText])
+
+  const handleNoteModalCancel = useCallback(() => {
+    setCurrentBookText(savedBookText)
+    setIsBookModalOpen(false)
+  }, [savedBookText])
 
   // Event handler for initiating desk drag
   const handlePointerDown = (event) => {
@@ -408,6 +494,68 @@ function App() {
               )
             })()}
 
+            {/* --- Phase 4: Mini Book on Main Room Tabletop (non-interactive) --- */}
+            {(() => {
+              const mp = miniSnapPoints[savedBookPosition]
+              const bx = mp.x
+              const by = mp.y
+
+              // Flat-lying book: parallelogram matching the desk perspective shear
+              const mW  = 18    // width (screen horizontal)
+              const mD  = 8     // depth (into screen / upward)
+              const mT  = 2     // page thickness (drops DOWN on Y-axis)
+              const mSx = 0.30  // horizontal shear per depth unit
+              const mSpW = 2.5  // spine strip width
+
+              // Cover top-face corners
+              const flX = bx - mW / 2,             flY = by
+              const frX = bx + mW / 2,             frY = by
+              const brX = bx + mW / 2 + mSx * mD,  brY = by - mD
+              const blX = bx - mW / 2 + mSx * mD,  blY = by - mD
+
+              // Polygon point strings
+              const coverPts    = `${flX},${flY} ${frX},${frY} ${brX},${brY} ${blX},${blY}`
+              const spinePts    = `${flX},${flY} ${flX + mSpW},${flY} ${blX + mSpW},${blY} ${blX},${blY}`
+              const frontPgPts  = `${flX},${flY} ${frX},${frY} ${frX},${frY + mT} ${flX},${flY + mT}`
+              const rightPgPts  = `${frX},${frY} ${brX},${brY} ${brX},${brY + mT} ${frX},${frY + mT}`
+              const shadowPts   = `${flX - 1},${flY + mT + 2} ${frX + 2},${frY + mT + 2} ${brX + 2},${brY + mT + 2} ${blX - 1},${blY + mT + 2}`
+
+              // Bookmark sticky-tab: sticks out from right pages edge, anchored by depth fractions
+              const mTabOut = 5
+              const mTabF1 = 0.35, mTabF2 = 0.58
+              // Right edge runs from (frX, frY+mT) to (brX, brY+mT)
+              const mTX1 = frX + (brX - frX) * mTabF1, mTY1 = (frY + mT) + ((brY + mT) - (frY + mT)) * mTabF1
+              const mTX2 = frX + (brX - frX) * mTabF2, mTY2 = (frY + mT) + ((brY + mT) - (frY + mT)) * mTabF2
+              const mTabPts = `${mTX1},${mTY1} ${mTX2},${mTY2} ${mTX2 + mTabOut},${mTY2} ${mTX1 + mTabOut},${mTY1}`
+
+              // Title line at depth fraction 0.40
+              const t1f = 0.40
+              const t1y = by - mD * t1f
+              const t1x1 = flX + mSx * mD * t1f + mSpW + 1
+              const t1x2 = frX + mSx * mD * t1f - 2
+
+              return (
+                <g style={{ pointerEvents: 'none' }}>
+                  {/* Shadow */}
+                  <polygon points={shadowPts} fill="rgba(0,0,0,0.16)" />
+                  {/* Front-edge pages (cream, drops down by mT) */}
+                  <polygon points={frontPgPts} fill="#F5F2E9" stroke="#5c4b3f" strokeWidth="0.7" strokeLinejoin="round" />
+                  {/* Right-side pages (cream, drops down by mT) */}
+                  <polygon points={rightPgPts} fill="#F4EAE1" stroke="#5c4b3f" strokeWidth="0.6" strokeLinejoin="round" />
+                  {/* Main cover face (red) */}
+                  <polygon points={coverPts} fill="#C0392B" stroke="#5c4b3f" strokeWidth="0.9" strokeLinejoin="round" />
+                  {/* Spine strip */}
+                  <polygon points={spinePts} fill="#8B2C2C" stroke="#5c4b3f" strokeWidth="0.6" strokeLinejoin="round" />
+                  {/* Title line */}
+                  <line x1={t1x1} y1={t1y} x2={t1x2} y2={t1y} stroke="#F5F2E9" strokeWidth="0.9" strokeLinecap="round" />
+                  {/* Bookmark sticky-tab */}
+                  <polygon points={mTabPts} fill="#F2C94C" stroke="#5c4b3f" strokeWidth="0.5" strokeLinejoin="round" />
+                  {/* Note indicator dot */}
+                  {savedBookText && <circle cx={(mTX1 + mTX2) / 2 + mTabOut - 1} cy={(mTY1 + mTY2) / 2} r="1.2" fill="#5c4b3f" opacity="0.7" />}
+                </g>
+              )
+            })()}
+
             {/* Front Legs (Drawn last to sit in front of the desk edge) */}
             <line x1="15" y1="62" x2="15" y2="140" stroke="#5c4b3f" strokeWidth="3.5" strokeLinecap="round" />
             <line x1="15" y1="62" x2="15" y2="140" stroke="#e3d5ca" strokeWidth="1.8" strokeLinecap="round" />
@@ -593,6 +741,122 @@ function App() {
                   </g>
                 ))}
 
+                {/* --- Phase 4: Draggable Book Asset on the Close-up Tabletop --- */}
+                {(() => {
+                  const activeBookSnap = closeUpSnapPoints[bookPosition]
+                  const bx = activeBookSnap.x + (isBookDragging ? bookDragOffset.x : 0)
+                  const by = activeBookSnap.y + (isBookDragging ? bookDragOffset.y : 0)
+                  // Snap anchor sits at the front-center of the book base
+                  const drawY = by + 6  // slight downward shift to ground on crosshair
+
+                  // Flat-lying book geometry — parallelogram matching desk perspective
+                  const W   = 100  // cover width  (screen horizontal)
+                  const D   = 68   // cover depth  (into screen / upward on-screen)
+                  const T   = 10   // page thickness (drops DOWN on Y-axis)
+                  const sx  = 0.30 // horizontal shear per depth unit
+                  const spW = 14   // spine strip width (left edge)
+
+                  // Four corners of the flat cover top-face (parallelogram)
+                  const flX = bx - W / 2,            flY = drawY
+                  const frX = bx + W / 2,            frY = drawY
+                  const brX = bx + W / 2 + sx * D,   brY = drawY - D
+                  const blX = bx - W / 2 + sx * D,   blY = drawY - D
+
+                  // Spine inner edge (spW from left)
+                  const sflX = flX + spW
+                  const sblX = blX + spW
+
+                  // Polygon point strings
+                  const coverPts   = `${flX},${flY} ${frX},${frY} ${brX},${brY} ${blX},${blY}`
+                  const spinePts   = `${flX},${flY} ${sflX},${flY} ${sblX},${blY} ${blX},${blY}`
+                  const frontPgPts = `${flX},${flY} ${frX},${frY} ${frX},${frY + T} ${flX},${flY + T}`
+                  const rightPgPts = `${frX},${frY} ${brX},${brY} ${brX},${brY + T} ${frX},${frY + T}`
+
+                  // Shadow polygon (sits below the bottom faces)
+                  const shOff = 6
+                  const shadowPts = `${flX - 4},${flY + T + shOff} ${frX + 4},${frY + T + shOff} ${brX + 4},${brY + T + shOff} ${blX - 4},${blY + T + shOff}`
+
+                  // Title lines — at depth fractions on the cover face
+                  const t1f = 0.32
+                  const t1y = drawY - D * t1f
+                  const t1x1 = flX + sx * D * t1f + spW + 10
+                  const t1x2 = frX + sx * D * t1f - 10
+
+                  const t2f = 0.50
+                  const t2y = drawY - D * t2f
+                  const t2x1 = flX + sx * D * t2f + spW + 10
+                  const t2x2 = frX + sx * D * t2f - 16
+
+                  // Heart center — at depth 0.68, horizontally centered on cover
+                  const hf  = 0.68
+                  const hcx = (flX + frX) / 2 + sx * D * hf
+                  const hcy = drawY - D * hf
+
+                  // Bookmark sticky-tab: sticks out from the right pages face
+                  // Right-side bottom edge runs from (frX, frY+T) to (brX, brY+T)
+                  const tabOut = 16
+                  const tabF1 = 0.35, tabF2 = 0.58
+                  const tX1 = frX + (brX - frX) * tabF1, tY1 = (frY + T) + ((brY + T) - (frY + T)) * tabF1
+                  const tX2 = frX + (brX - frX) * tabF2, tY2 = (frY + T) + ((brY + T) - (frY + T)) * tabF2
+                  const tabPts = `${tX1},${tY1} ${tX2},${tY2} ${tX2 + tabOut},${tY2} ${tX1 + tabOut},${tY1}`
+
+                  return (
+                    <g
+                      onPointerDown={handleBookPointerDown}
+                      onPointerMove={handleBookPointerMove}
+                      onPointerUp={handleBookPointerUp}
+                      onPointerCancel={handleBookPointerUp}
+                      style={{ cursor: isBookDragging ? 'grabbing' : 'grab', touchAction: 'none' }}
+                    >
+                      {/* ── SHADOW polygon ── */}
+                      <polygon points={shadowPts} fill="rgba(0,0,0,0.15)" />
+
+                      {/* ── FRONT-EDGE PAGES (cream, drops down by T) ── */}
+                      <polygon points={frontPgPts} fill="#F5F2E9" stroke="#5c4b3f" strokeWidth="2.5" strokeLinejoin="round" />
+
+                      {/* ── RIGHT-SIDE PAGES (cream, drops down by T) ── */}
+                      <polygon points={rightPgPts} fill="#F4EAE1" stroke="#5c4b3f" strokeWidth="2" strokeLinejoin="round" />
+
+                      {/* ── MAIN COVER FACE (red parallelogram, on top) ── */}
+                      <polygon points={coverPts} fill="#C0392B" stroke="#5c4b3f" strokeWidth="3" strokeLinejoin="round" />
+
+                      {/* ── SPINE STRIP (darker red, left edge, topmost) ── */}
+                      <polygon points={spinePts} fill="#8B2C2C" stroke="#5c4b3f" strokeWidth="2" strokeLinejoin="round" />
+
+                      {/* ── TITLE LINE 1 ── */}
+                      <line x1={t1x1} y1={t1y} x2={t1x2} y2={t1y} stroke="#F5F2E9" strokeWidth="3" strokeLinecap="round" />
+
+                      {/* ── TITLE LINE 2 ── */}
+                      <line x1={t2x1} y1={t2y} x2={t2x2} y2={t2y} stroke="#F5F2E9" strokeWidth="2" strokeLinecap="round" />
+
+                      {/* ── HEART DOODLE ── */}
+                      <path
+                        d={`M ${hcx},${hcy + 4} c 0,-6 -9,-6 -9,0 c 0,6 9,10 9,10 c 0,0 9,-4 9,-10 c 0,-6 -9,-6 -9,0`}
+                        fill="#F5F2E9"
+                        opacity="0.78"
+                      />
+
+                      {/* ── BOOKMARK STICKY-TAB (against the right pages face) ── */}
+                      <polygon
+                        points={tabPts}
+                        fill="#F2C94C"
+                        stroke="#5c4b3f" strokeWidth="1.5" strokeLinejoin="round"
+                      />
+
+                      {/* ── NOTE INDICATOR dot on tab ── */}
+                      {savedBookText && (
+                        <circle
+                          cx={(tX1 + tX2) / 2 + tabOut - 4}
+                          cy={(tY1 + tY2) / 2}
+                          r="5"
+                          fill="#5c4b3f"
+                          opacity="0.7"
+                        />
+                      )}
+                    </g>
+                  )
+                })()}
+
                 {/* --- Phase 3: Draggable Lamp Asset on the Close-up Tabletop --- */}
                 {(() => {
                   const lx = activeLampSnap.x + (isLampDragging ? lampDragOffset.x : 0)
@@ -723,6 +987,183 @@ function App() {
                 className="px-6 py-2 bg-[#f3e8e0] border-2 border-[#5c4b3f] text-[#5c4b3f] font-semibold rounded-[8px_12px_10px_12px] shadow-[3px_3px_0px_#5c4b3f] hover:shadow-[1px_1px_0px_#5c4b3f] hover:translate-x-[2px] hover:translate-y-[2px] active:translate-x-[3px] active:translate-y-[3px] transition-all cursor-pointer font-mono text-sm"
               >
                 Save
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ═══════════════════════════════════════════════════════════════════ */}
+      {/* Phase 4: Note Modal — Lined paper journal overlay                  */}
+      {/* ═══════════════════════════════════════════════════════════════════ */}
+      {isBookModalOpen && (
+        <div
+          id="note-modal-backdrop"
+          className="fixed inset-0 z-[100] flex items-center justify-center"
+          style={{ backdropFilter: 'blur(6px)', backgroundColor: 'rgba(0,0,0,0.45)' }}
+          onClick={(e) => { if (e.target.id === 'note-modal-backdrop') handleNoteModalCancel() }}
+        >
+          {/* Paper card */}
+          <div
+            style={{
+              width: 'clamp(320px, 42vw, 560px)',
+              height: 'clamp(420px, 65vh, 720px)',
+              backgroundColor: '#FEFCF3',
+              borderRadius: '4px 12px 4px 4px',
+              border: '2px solid #5c4b3f',
+              boxShadow: '6px 6px 0px #5c4b3f, 0 20px 60px rgba(0,0,0,0.35)',
+              display: 'flex',
+              flexDirection: 'column',
+              overflow: 'hidden',
+              position: 'relative',
+            }}
+          >
+            {/* Red margin line */}
+            <div style={{
+              position: 'absolute',
+              left: '52px',
+              top: 0,
+              bottom: 0,
+              width: '2px',
+              backgroundColor: 'rgba(200,80,80,0.35)',
+              pointerEvents: 'none',
+              zIndex: 1,
+            }} />
+
+            {/* Spiral binding holes */}
+            {[60, 110, 160, 210, 260, 310, 360].map((y, i) => (
+              <div key={i} style={{
+                position: 'absolute',
+                left: '14px',
+                top: `${y}px`,
+                width: '18px',
+                height: '18px',
+                borderRadius: '50%',
+                border: '2px solid #5c4b3f',
+                backgroundColor: '#FEFCF3',
+                zIndex: 2,
+                pointerEvents: 'none',
+              }} />
+            ))}
+
+            {/* Header: date + title */}
+            <div style={{
+              padding: '18px 20px 10px 62px',
+              borderBottom: '1.5px solid rgba(92,75,63,0.15)',
+              display: 'flex',
+              justifyContent: 'space-between',
+              alignItems: 'flex-end',
+              flexShrink: 0,
+            }}>
+              <span style={{
+                fontFamily: "'Caveat', 'Patrick Hand', cursive, sans-serif",
+                fontSize: '22px',
+                fontWeight: 700,
+                color: '#5c4b3f',
+                letterSpacing: '0.02em',
+              }}>My Notes</span>
+              <span style={{
+                fontFamily: 'monospace',
+                fontSize: '11px',
+                color: '#9a7f6e',
+                letterSpacing: '0.05em',
+              }}>
+                {new Date().toLocaleDateString(undefined, { weekday: 'short', year: 'numeric', month: 'short', day: 'numeric' })}
+              </span>
+            </div>
+
+            {/* Lined paper area with textarea */}
+            <div style={{ flex: 1, position: 'relative', overflow: 'hidden' }}>
+              {/* Horizontal ruled lines */}
+              <svg
+                style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', pointerEvents: 'none', zIndex: 0 }}
+                preserveAspectRatio="none"
+              >
+                {Array.from({ length: 30 }, (_, i) => (
+                  <line
+                    key={i}
+                    x1="0" y1={28 + i * 30}
+                    x2="100%" y2={28 + i * 30}
+                    stroke="rgba(147,197,253,0.45)" strokeWidth="1"
+                  />
+                ))}
+              </svg>
+              {/* Transparent textarea sitting on top of the lines */}
+              <textarea
+                id="note-textarea"
+                autoFocus
+                value={currentBookText}
+                onChange={(e) => setCurrentBookText(e.target.value)}
+                placeholder="Write something cozy..."
+                style={{
+                  position: 'absolute',
+                  inset: 0,
+                  width: '100%',
+                  height: '100%',
+                  padding: '8px 20px 8px 62px',
+                  background: 'transparent',
+                  border: 'none',
+                  outline: 'none',
+                  resize: 'none',
+                  fontFamily: "'Caveat', 'Patrick Hand', cursive, sans-serif",
+                  fontSize: '18px',
+                  lineHeight: '30px',
+                  color: '#3d2e24',
+                  zIndex: 1,
+                  boxSizing: 'border-box',
+                }}
+              />
+            </div>
+
+            {/* Footer: action buttons */}
+            <div style={{
+              padding: '12px 20px 16px 62px',
+              borderTop: '1.5px solid rgba(92,75,63,0.15)',
+              display: 'flex',
+              justifyContent: 'flex-end',
+              gap: '12px',
+              flexShrink: 0,
+              backgroundColor: 'rgba(244,235,208,0.6)',
+            }}>
+              <button
+                onClick={handleNoteModalCancel}
+                style={{
+                  padding: '8px 22px',
+                  backgroundColor: '#FEFCF3',
+                  border: '2px solid #5c4b3f',
+                  borderRadius: '10px 6px 10px 8px',
+                  boxShadow: '3px 3px 0px #5c4b3f',
+                  color: '#5c4b3f',
+                  fontFamily: 'monospace',
+                  fontSize: '13px',
+                  fontWeight: 500,
+                  cursor: 'pointer',
+                  transition: 'all 0.15s',
+                }}
+                onMouseEnter={(e) => { e.currentTarget.style.boxShadow = '1px 1px 0px #5c4b3f'; e.currentTarget.style.transform = 'translate(2px,2px)' }}
+                onMouseLeave={(e) => { e.currentTarget.style.boxShadow = '3px 3px 0px #5c4b3f'; e.currentTarget.style.transform = '' }}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleNoteModalSave}
+                style={{
+                  padding: '8px 22px',
+                  backgroundColor: '#f3e8e0',
+                  border: '2px solid #5c4b3f',
+                  borderRadius: '6px 10px 8px 10px',
+                  boxShadow: '3px 3px 0px #5c4b3f',
+                  color: '#5c4b3f',
+                  fontFamily: 'monospace',
+                  fontSize: '13px',
+                  fontWeight: 700,
+                  cursor: 'pointer',
+                  transition: 'all 0.15s',
+                }}
+                onMouseEnter={(e) => { e.currentTarget.style.boxShadow = '1px 1px 0px #5c4b3f'; e.currentTarget.style.transform = 'translate(2px,2px)' }}
+                onMouseLeave={(e) => { e.currentTarget.style.boxShadow = '3px 3px 0px #5c4b3f'; e.currentTarget.style.transform = '' }}
+              >
+                Save ✓
               </button>
             </div>
           </div>
