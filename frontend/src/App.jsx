@@ -56,6 +56,17 @@ function App() {
   const [isBookModalOpen, setIsBookModalOpen] = useState(false)
   const [currentBookText, setCurrentBookText] = useState('')
 
+  // --- Phase 6: Plant Persistent Global State ---
+  // Default to index 2 (TR – top-right), distinct from lamp (2) and book (4)
+  const [savedPlantPosition, setSavedPlantPosition] = useState(2)
+
+  // --- Phase 6: Plant Session State (active only inside zoom overlay) ---
+  const [plantPosition, setPlantPosition] = useState(2)
+  const [isPlantDragging, setIsPlantDragging] = useState(false)
+  const plantHasDraggedRef = useRef(false)
+  const plantDragStartRef = useRef({ x: 0, y: 0 })
+  const [plantDragOffset, setPlantDragOffset] = useState({ x: 0, y: 0 })
+
   // ── Normalized Snap Grid ──────────────────────────────────────────────────
   // Each snap point is defined as (xFrac, yFrac) where:
   //   xFrac  0.0 = left edge of tabletop,  1.0 = right edge
@@ -105,7 +116,7 @@ function App() {
     { id: 'T-Right', top: 61.25, left: 65 },
   ]
 
-  // --- Zoom Open Handler: Initialize lamp + book session from saved state ---
+  // --- Zoom Open Handler: Initialize lamp + book + plant session from saved state ---
   const openZoom = useCallback(() => {
     setLampPosition(savedLampPosition)
     setIsLampOn(savedIsLampOn)
@@ -117,16 +128,22 @@ function App() {
     setIsBookDragging(false)
     bookHasDraggedRef.current = false
     setBookDragOffset({ x: 0, y: 0 })
+    // Plant session init
+    setPlantPosition(savedPlantPosition)
+    setIsPlantDragging(false)
+    plantHasDraggedRef.current = false
+    setPlantDragOffset({ x: 0, y: 0 })
     setIsDeskZoomed(true)
-  }, [savedLampPosition, savedIsLampOn, savedBookPosition])
+  }, [savedLampPosition, savedIsLampOn, savedBookPosition, savedPlantPosition])
 
-  // --- Zoom Save Handler: Commit lamp + book session state to saved globals ---
+  // --- Zoom Save Handler: Commit lamp + book + plant session state to saved globals ---
   const handleZoomSave = useCallback(() => {
     setSavedLampPosition(lampPosition)
     setSavedIsLampOn(isLampOn)
     setSavedBookPosition(bookPosition)
+    setSavedPlantPosition(plantPosition)
     setIsDeskZoomed(false)
-  }, [lampPosition, isLampOn, bookPosition])
+  }, [lampPosition, isLampOn, bookPosition, plantPosition])
 
   // --- Zoom Cancel Handler: Discard session changes, revert to saved ---
   const handleZoomCancel = useCallback(() => {
@@ -258,6 +275,55 @@ function App() {
     bookHasDraggedRef.current = false
     setBookDragOffset({ x: 0, y: 0 })
   }, [isBookDragging, bookPosition, bookDragOffset, closeUpSnapPoints, savedBookText])
+
+  // --- Phase 6: Plant Drag Handlers inside the Zoom SVG ---
+  const handlePlantPointerDown = useCallback((event) => {
+    event.preventDefault()
+    event.stopPropagation()
+    event.currentTarget.setPointerCapture(event.pointerId)
+    setIsPlantDragging(true)
+    plantHasDraggedRef.current = false
+    const svgPt = svgPointFromEvent(event)
+    plantDragStartRef.current = svgPt
+    setPlantDragOffset({ x: 0, y: 0 })
+  }, [svgPointFromEvent])
+
+  const handlePlantPointerMove = useCallback((event) => {
+    if (!isPlantDragging) return
+    event.preventDefault()
+    event.stopPropagation()
+    plantHasDraggedRef.current = true
+    const svgPt = svgPointFromEvent(event)
+    setPlantDragOffset({
+      x: svgPt.x - plantDragStartRef.current.x,
+      y: svgPt.y - plantDragStartRef.current.y,
+    })
+  }, [isPlantDragging, svgPointFromEvent])
+
+  const handlePlantPointerUp = useCallback((event) => {
+    if (!isPlantDragging) return
+    event.preventDefault()
+    event.stopPropagation()
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId)
+    }
+    if (plantHasDraggedRef.current) {
+      // Find nearest snap point to drop position
+      const currentSnap = closeUpSnapPoints[plantPosition]
+      const dropX = currentSnap.x + plantDragOffset.x
+      const dropY = currentSnap.y + plantDragOffset.y
+      let nearestIdx = 0
+      let shortestDist = Number.POSITIVE_INFINITY
+      closeUpSnapPoints.forEach((pt, idx) => {
+        const dist = Math.sqrt((dropX - pt.x) ** 2 + (dropY - pt.y) ** 2)
+        if (dist < shortestDist) { shortestDist = dist; nearestIdx = idx }
+      })
+      setPlantPosition(nearestIdx)
+    }
+    setIsPlantDragging(false)
+    plantHasDraggedRef.current = false
+    setPlantDragOffset({ x: 0, y: 0 })
+  }, [isPlantDragging, plantPosition, plantDragOffset, closeUpSnapPoints])
 
   // --- Phase 4: Note Modal Handlers ---
   const handleNoteModalSave = useCallback(() => {
@@ -552,6 +618,52 @@ function App() {
                   <polygon points={mTabPts} fill="#F2C94C" stroke="#5c4b3f" strokeWidth="0.5" strokeLinejoin="round" />
                   {/* Note indicator dot */}
                   {savedBookText && <circle cx={(mTX1 + mTX2) / 2 + mTabOut - 1} cy={(mTY1 + mTY2) / 2} r="1.2" fill="#5c4b3f" opacity="0.7" />}
+                </g>
+              )
+            })()}
+
+            {/* --- Phase 6: Mini Plant on Main Room Tabletop (non-interactive) --- */}
+            {(() => {
+              const mp = miniSnapPoints[savedPlantPosition]
+              const px = mp.x
+              const py = mp.y
+              // Mini pot: tapered trapezoid — wider at top, narrower at base
+              // All coords relative to (px, py) = base-center anchor
+              const ptW = 7   // half-width at pot top rim
+              const pbW = 5   // half-width at pot base
+              const pH  = 8   // pot height
+              const potTop    = py - pH
+              const potBottom = py
+              // Pot bottom curve sag (matches rim ellipse perspective)
+              const bSag = 1.5
+              return (
+                <g style={{ pointerEvents: 'none' }}>
+                  {/* Shadow */}
+                  <ellipse cx={px} cy={py + 1} rx={ptW + 1.5} ry="1.2" fill="rgba(0,0,0,0.15)" />
+                  {/* Pot body — curved bottom edge */}
+                  <path
+                    d={`M ${px - ptW},${potTop} L ${px - pbW},${potBottom} Q ${px},${potBottom + bSag} ${px + pbW},${potBottom} L ${px + ptW},${potTop} Z`}
+                    fill="#E8D5B5" stroke="#5c4b3f" strokeWidth="0.8" strokeLinejoin="round"
+                  />
+                  {/* Curved rib line */}
+                  {(() => {
+                    const f = 0.55
+                    const rY = potTop + pH * f
+                    const rHW = ptW + (pbW - ptW) * f
+                    const rSag = bSag * f * 0.6
+                    return <path d={`M ${px - rHW + 0.5},${rY} Q ${px},${rY + rSag} ${px + rHW - 0.5},${rY}`} fill="none" stroke="#5c4b3f" strokeWidth="0.5" opacity="0.5" />
+                  })()}
+                  {/* Soil ellipse */}
+                  <ellipse cx={px} cy={potTop} rx={ptW - 0.5} ry="1.5" fill="#5C3A21" stroke="#5c4b3f" strokeWidth="0.6" />
+                  {/* Stem */}
+                  <line x1={px} y1={potTop} x2={px} y2={potTop - 9} stroke="#5c4b3f" strokeWidth="1.4" strokeLinecap="round" />
+                  <line x1={px} y1={potTop} x2={px} y2={potTop - 9} stroke="#7CB342" strokeWidth="0.8" strokeLinecap="round" />
+                  {/* Leaf L — pointed via two beziers */}
+                  <path d={`M ${px},${potTop - 5} Q ${px - 5},${potTop - 7} ${px - 4},${potTop - 12} Q ${px - 2},${potTop - 8} ${px},${potTop - 5} Z`} fill="#7CB342" stroke="#5c4b3f" strokeWidth="0.5" />
+                  {/* Leaf R — pointed */}
+                  <path d={`M ${px},${potTop - 7} Q ${px + 5},${potTop - 8} ${px + 5},${potTop - 14} Q ${px + 2},${potTop - 10} ${px},${potTop - 7} Z`} fill="#7CB342" stroke="#5c4b3f" strokeWidth="0.5" />
+                  {/* Leaf top — pointed */}
+                  <path d={`M ${px},${potTop - 9} Q ${px - 2},${potTop - 13} ${px},${potTop - 17} Q ${px + 2},${potTop - 13} ${px},${potTop - 9} Z`} fill="#7CB342" stroke="#5c4b3f" strokeWidth="0.5" />
                 </g>
               )
             })()}
@@ -853,6 +965,101 @@ function App() {
                           opacity="0.7"
                         />
                       )}
+                    </g>
+                  )
+                })()}
+
+                {/* --- Phase 6: Draggable Plant Asset on the Close-up Tabletop --- */}
+                {(() => {
+                  const activePlantSnap = closeUpSnapPoints[plantPosition]
+                  const px = activePlantSnap.x + (isPlantDragging ? plantDragOffset.x : 0)
+                  const py = activePlantSnap.y + (isPlantDragging ? plantDragOffset.y : 0)
+                  // drawY: anchor at base-center of pot; shift slightly down to sit on crosshair
+                  const drawY = py + 8
+
+                  // Pot geometry — tapered trapezoid (wider top, narrower base)
+                  const ptW = 36   // half-width at pot top rim
+                  const pbW = 26   // half-width at pot base
+                  const pH  = 55   // total pot height
+                  const rimY = drawY - pH  // y of top rim
+
+                  return (
+                    <g
+                      onPointerDown={handlePlantPointerDown}
+                      onPointerMove={handlePlantPointerMove}
+                      onPointerUp={handlePlantPointerUp}
+                      onPointerCancel={handlePlantPointerUp}
+                      style={{ cursor: isPlantDragging ? 'grabbing' : 'grab', touchAction: 'none' }}
+                    >
+                      {/* ── GROUNDING SHADOW ── */}
+                      <ellipse cx={px} cy={drawY + 5} rx={ptW + 10} ry="10" fill="rgba(0,0,0,0.15)" />
+
+                      {/* ── POT BODY — curved bottom edge for 3D perspective ── */}
+                      {(() => {
+                        const bSag = 8  // how much the bottom edge curves downward
+                        return (
+                          <path
+                            d={`M ${px - ptW},${rimY} L ${px - pbW},${drawY} Q ${px},${drawY + bSag} ${px + pbW},${drawY} L ${px + ptW},${rimY} Z`}
+                            fill="#E8D5B5"
+                            stroke="#5c4b3f" strokeWidth="3" strokeLinejoin="round"
+                          />
+                        )
+                      })()}
+
+                      {/* ── CURVED RIB LINES on pot body ── */}
+                      {[0.35, 0.60, 0.82].map((f, i) => {
+                        const lineY = rimY + pH * f
+                        const hw = ptW + (pbW - ptW) * f
+                        const ribSag = 8 * f * 0.6  // sag scales down toward the top
+                        return (
+                          <path
+                            key={i}
+                            d={`M ${px - hw + 2},${lineY} Q ${px},${lineY + ribSag} ${px + hw - 2},${lineY}`}
+                            fill="none"
+                            stroke="#5c4b3f" strokeWidth="1.5" opacity="0.4"
+                          />
+                        )
+                      })}
+
+                      {/* ── POT RIM ELLIPSE (3D top opening) ── */}
+                      <ellipse cx={px} cy={rimY} rx={ptW} ry="9"
+                        fill="#D4B896" stroke="#5c4b3f" strokeWidth="3"
+                      />
+
+                      {/* ── SOIL ELLIPSE inside rim ── */}
+                      <ellipse cx={px} cy={rimY} rx={ptW - 5} ry="6"
+                        fill="#5C3A21" stroke="#5c4b3f" strokeWidth="2"
+                      />
+
+                      {/* ── STEM ── */}
+                      <line
+                        x1={px} y1={rimY}
+                        x2={px} y2={rimY - 90}
+                        stroke="#5c4b3f" strokeWidth="7" strokeLinecap="round"
+                      />
+                      <line
+                        x1={px} y1={rimY}
+                        x2={px} y2={rimY - 90}
+                        stroke="#7CB342" strokeWidth="4" strokeLinecap="round"
+                      />
+
+                      {/* ── LEAF 1: left, lower — pointed via two opposing beziers ── */}
+                      <path
+                        d={`M ${px},${rimY - 35} Q ${px - 38},${rimY - 30} ${px - 30},${rimY - 62} Q ${px - 18},${rimY - 50} ${px},${rimY - 35} Z`}
+                        fill="#7CB342" stroke="#5c4b3f" strokeWidth="2" strokeLinejoin="round"
+                      />
+
+                      {/* ── LEAF 2: right, mid — pointed ── */}
+                      <path
+                        d={`M ${px},${rimY - 55} Q ${px + 40},${rimY - 48} ${px + 35},${rimY - 82} Q ${px + 20},${rimY - 72} ${px},${rimY - 55} Z`}
+                        fill="#7CB342" stroke="#5c4b3f" strokeWidth="2" strokeLinejoin="round"
+                      />
+
+                      {/* ── LEAF 3: top, slightly left — pointed ── */}
+                      <path
+                        d={`M ${px},${rimY - 78} Q ${px - 22},${rimY - 95} ${px - 8},${rimY - 118} Q ${px + 8},${rimY - 100} ${px},${rimY - 78} Z`}
+                        fill="#7CB342" stroke="#5c4b3f" strokeWidth="2" strokeLinejoin="round"
+                      />
                     </g>
                   )
                 })()}
