@@ -57,15 +57,25 @@ function App() {
   const [currentBookText, setCurrentBookText] = useState('')
 
   // --- Phase 6: Plant Persistent Global State ---
-  // Default to index 2 (TR – top-right), distinct from lamp (2) and book (4)
-  const [savedPlantPosition, setSavedPlantPosition] = useState(2)
+  // Default to index 0 (TL - top-left), distinct from lamp (2) and book (4)
+  const [savedPlantPosition, setSavedPlantPosition] = useState(0)
 
   // --- Phase 6: Plant Session State (active only inside zoom overlay) ---
-  const [plantPosition, setPlantPosition] = useState(2)
+  const [plantPosition, setPlantPosition] = useState(0)
   const [isPlantDragging, setIsPlantDragging] = useState(false)
   const plantHasDraggedRef = useRef(false)
   const plantDragStartRef = useRef({ x: 0, y: 0 })
   const [plantDragOffset, setPlantDragOffset] = useState({ x: 0, y: 0 })
+
+  // --- Occupancy Registry ---
+  const occupiedSlotsRef = useRef({
+    2: 'lamp',
+    4: 'book',
+    0: 'plant',
+  })
+
+  // --- Phase 3: Day/Night Sync State ---
+  const [isNightMode, setIsNightMode] = useState(false)
 
   // --- Phase 5: Window Persistent Global State ---
   // Default to wall snap index 0 (W-Left)
@@ -84,7 +94,7 @@ function App() {
   ]
 
   // --- Phase 5: Window theme variables (swap later for day/night) ---
-  const windowSkyColor   = '#D3E3FD'  // morning blue
+  const windowSkyColor   = isNightMode ? '#1A1A2E' : '#D3E3FD'  // indigo or morning blue
   const windowCloudColor = '#F5F2E9'  // warm cream
   const windowSunColor   = 'rgba(255,220,120,0.35)'
 
@@ -154,6 +164,12 @@ function App() {
     setIsPlantDragging(false)
     plantHasDraggedRef.current = false
     setPlantDragOffset({ x: 0, y: 0 })
+    // Sync registry
+    occupiedSlotsRef.current = {
+      [savedLampPosition]: 'lamp',
+      [savedBookPosition]: 'book',
+      [savedPlantPosition]: 'plant',
+    }
     setIsDeskZoomed(true)
   }, [savedLampPosition, savedIsLampOn, savedBookPosition, savedPlantPosition])
 
@@ -233,7 +249,14 @@ function App() {
           nearestIdx = idx
         }
       })
-      setLampPosition(nearestIdx)
+      const slotOwner = occupiedSlotsRef.current[nearestIdx]
+      if (slotOwner == null || slotOwner === 'lamp') {
+        if (lampPosition !== nearestIdx) {
+          occupiedSlotsRef.current[lampPosition] = null
+          occupiedSlotsRef.current[nearestIdx] = 'lamp'
+        }
+        setLampPosition(nearestIdx)
+      }
     } else {
       // Pure click with no drag: toggle lamp on/off
       setIsLampOn((prev) => !prev)
@@ -286,7 +309,14 @@ function App() {
         const dist = Math.sqrt((dropX - pt.x) ** 2 + (dropY - pt.y) ** 2)
         if (dist < shortestDist) { shortestDist = dist; nearestIdx = idx }
       })
-      setBookPosition(nearestIdx)
+      const slotOwner = occupiedSlotsRef.current[nearestIdx]
+      if (slotOwner == null || slotOwner === 'book') {
+        if (bookPosition !== nearestIdx) {
+          occupiedSlotsRef.current[bookPosition] = null
+          occupiedSlotsRef.current[nearestIdx] = 'book'
+        }
+        setBookPosition(nearestIdx)
+      }
     } else {
       // Pure click: open note modal
       setCurrentBookText(savedBookText)
@@ -339,7 +369,14 @@ function App() {
         const dist = Math.sqrt((dropX - pt.x) ** 2 + (dropY - pt.y) ** 2)
         if (dist < shortestDist) { shortestDist = dist; nearestIdx = idx }
       })
-      setPlantPosition(nearestIdx)
+      const slotOwner = occupiedSlotsRef.current[nearestIdx]
+      if (slotOwner == null || slotOwner === 'plant') {
+        if (plantPosition !== nearestIdx) {
+          occupiedSlotsRef.current[plantPosition] = null
+          occupiedSlotsRef.current[nearestIdx] = 'plant'
+        }
+        setPlantPosition(nearestIdx)
+      }
     }
     setIsPlantDragging(false)
     plantHasDraggedRef.current = false
@@ -567,28 +604,38 @@ function App() {
             <rect x="4" y="4" width="172" height="172" rx="5" fill="#E8D5B5" stroke="#5C4B3F" strokeWidth="5" strokeLinejoin="round" />
 
             {/* ── SKY PANES (4 quadrants, expanded to fill space freed by slim muntins) ── */}
-            <rect x="14" y="12" width="72" height="76" rx="3" fill={windowSkyColor} />
-            <rect x="94" y="12" width="72" height="76" rx="3" fill={windowSkyColor} />
-            <rect x="14" y="96" width="72" height="74" rx="3" fill={windowSkyColor} />
-            <rect x="94" y="96" width="72" height="74" rx="3" fill={windowSkyColor} />
+            <rect x="14" y="12" width="72" height="76" rx="3" fill={windowSkyColor} style={{ transition: 'fill 1.5s ease-in-out' }} />
+            <rect x="94" y="12" width="72" height="76" rx="3" fill={windowSkyColor} style={{ transition: 'fill 1.5s ease-in-out' }} />
+            <rect x="14" y="96" width="72" height="74" rx="3" fill={windowSkyColor} style={{ transition: 'fill 1.5s ease-in-out' }} />
+            <rect x="94" y="96" width="72" height="74" rx="3" fill={windowSkyColor} style={{ transition: 'fill 1.5s ease-in-out' }} />
 
-            {/* ── MORNING SUN GLOW (top-right pane) ── */}
-            <circle cx="148" cy="28" r="18" fill={windowSunColor} />
-            <circle cx="148" cy="28" r="10" fill="rgba(255,235,160,0.5)" />
+            {/* ── SKY CONTENT (Sun/Clouds or Moon/Stars) ── */}
+            <g style={{ transition: 'opacity 1.5s ease-in-out', opacity: isNightMode ? 0 : 1 }}>
+              {/* MORNING SUN GLOW (top-right pane) */}
+              <circle cx="148" cy="28" r="18" fill={windowSunColor} />
+              <circle cx="148" cy="28" r="10" fill="rgba(255,235,160,0.5)" />
+              {/* CLOUDS */}
+              <ellipse cx="38" cy="52" rx="16" ry="7" fill={windowCloudColor} opacity="0.9" />
+              <ellipse cx="52" cy="50" rx="12" ry="6" fill={windowCloudColor} opacity="0.85" />
+              <ellipse cx="44" cy="48" rx="10" ry="5" fill={windowCloudColor} opacity="0.95" />
+              <ellipse cx="118" cy="58" rx="14" ry="6" fill={windowCloudColor} opacity="0.85" />
+              <ellipse cx="130" cy="56" rx="10" ry="5" fill={windowCloudColor} opacity="0.9" />
+              <ellipse cx="52" cy="128" rx="13" ry="5.5" fill={windowCloudColor} opacity="0.8" />
+              <ellipse cx="42" cy="126" rx="9" ry="4.5" fill={windowCloudColor} opacity="0.85" />
+            </g>
 
-            {/* ── CLOUDS ── */}
-            {/* Cloud 1: top-left pane */}
-            <ellipse cx="38" cy="52" rx="16" ry="7" fill={windowCloudColor} opacity="0.9" />
-            <ellipse cx="52" cy="50" rx="12" ry="6" fill={windowCloudColor} opacity="0.85" />
-            <ellipse cx="44" cy="48" rx="10" ry="5" fill={windowCloudColor} opacity="0.95" />
-
-            {/* Cloud 2: top-right pane */}
-            <ellipse cx="118" cy="58" rx="14" ry="6" fill={windowCloudColor} opacity="0.85" />
-            <ellipse cx="130" cy="56" rx="10" ry="5" fill={windowCloudColor} opacity="0.9" />
-
-            {/* Cloud 3: bottom-left pane */}
-            <ellipse cx="52" cy="128" rx="13" ry="5.5" fill={windowCloudColor} opacity="0.8" />
-            <ellipse cx="42" cy="126" rx="9" ry="4.5" fill={windowCloudColor} opacity="0.85" />
+            <g style={{ transition: 'opacity 1.5s ease-in-out', opacity: isNightMode ? 1 : 0 }}>
+              {/* CRESCENT MOON */}
+              <path d="M148,22 C148,22 142,32 152,38 C144,38 138,30 148,22 Z" fill="#F5F2E9" />
+              {/* STARS */}
+              <circle cx="38" cy="32" r="1" fill="#F5F2E9" opacity="0.8" />
+              <circle cx="62" cy="50" r="1.5" fill="#F5F2E9" opacity="0.9" />
+              <circle cx="24" cy="68" r="1" fill="#F5F2E9" opacity="0.6" />
+              <circle cx="128" cy="68" r="1" fill="#F5F2E9" opacity="0.8" />
+              <circle cx="108" cy="48" r="1.5" fill="#F5F2E9" opacity="0.7" />
+              <circle cx="48" cy="128" r="1" fill="#F5F2E9" opacity="0.9" />
+              <circle cx="132" cy="118" r="1.5" fill="#F5F2E9" opacity="0.8" />
+            </g>
 
             {/* ── CROSSBAR MUNTINS (slim, delicate, drawn on top of panes) ── */}
             <rect x="86" y="8" width="8" height="164" rx="2" fill="#E8D5B5" stroke="#5C4B3F" strokeWidth="1.5" />
@@ -665,13 +712,11 @@ function App() {
               const mx = mp.x
               const my = mp.y
               return (
-                <g style={{ pointerEvents: 'none' }}>
-                  {/* Mini warm glow cone when lamp is on (drawn behind lamp body) */}
-                  {savedIsLampOn && (
-                    <g>
-                      <ellipse cx={mx + 7} cy={my - 5} rx="12" ry="6" fill="rgba(255, 220, 100, 0.30)" />
-                    </g>
-                  )}
+                <g 
+                  onClick={() => setIsNightMode(!isNightMode)}
+                  style={{ cursor: 'pointer', pointerEvents: 'auto' }}
+                >
+                  {/* Mini warm glow cone removed (now handled by global lighting overlay) */}
                   {/* Mini base shadow */}
                   <ellipse cx={mx} cy={my + 0.3} rx="8" ry="0.4" fill="rgba(0, 0, 0, 0.15)" />
                   {/* Mini circular base */}
@@ -806,6 +851,18 @@ function App() {
           </svg>
         </div>
 
+        {/* --- Phase 3: Global Lighting Overlay --- */}
+        <div
+          className="absolute inset-0 pointer-events-none transition-all duration-[1500ms] ease-in-out"
+          style={{
+            zIndex: 30, // Over table (20) and window (12)
+            background: isNightMode
+              ? 'radial-gradient(circle at 35% 60%, rgba(255, 230, 150, 0.1) 0%, rgba(20, 20, 40, 0.6) 40%, rgba(10, 10, 25, 0.85) 100%)'
+              : 'transparent',
+            mixBlendMode: isNightMode ? 'multiply' : 'normal',
+          }}
+        />
+
         {[
           { id: 'W-Left', top: '33.75%', left: '35%' },
           { id: 'W-Right', top: '33.75%', left: '65%' },
@@ -855,7 +912,12 @@ function App() {
           <div className="flex flex-col items-end gap-6">
             {/* Hand-Drawn / Classic Oval Tabletop Container */}
             <div 
-              className="w-[90vw] max-w-[900px] max-h-[85vh] aspect-[3/2] bg-[#f4ebd0] rounded-full border-4 border-[#5c4b3f] relative shadow-2xl overflow-hidden"
+              className="w-[90vw] max-w-[900px] max-h-[85vh] aspect-[3/2] rounded-full border-4 border-[#5c4b3f] relative shadow-2xl overflow-hidden transition-all duration-[1500ms]"
+              style={{
+                background: isNightMode
+                  ? 'radial-gradient(circle at 30% 40%, rgba(255, 220, 130, 0.15) 0%, rgba(40, 40, 60, 0.8) 50%, rgba(20, 20, 35, 0.95) 100%)'
+                  : '#f4ebd0'
+              }}
             >
               <svg
                 ref={zoomSvgRef}
@@ -864,12 +926,7 @@ function App() {
                 height="100%"
                 style={{ overflow: 'visible' }}
               >
-                <defs>
-                  <filter id="lamp-glow-blur" x="-50%" y="-50%" width="200%" height="200%">
-                    <feGaussianBlur stdDeviation="12" />
-                  </filter>
-                </defs>
-
+                {/* SVG Defs removed */}
                 {/* Tabletop Surface (A large detailed perspective trapezoid matching the shallow room angle) */}
                 <polygon 
                   points="40,130 560,130 590,290 10,290" 
@@ -892,42 +949,7 @@ function App() {
 
                 {/* // Future close-up tabletop assets and interior snap targets go here */}
 
-                {/* --- Phase 3: Lamp warm light cone (rendered behind snap points, in front of desk) --- */}
-                {isLampOn && (() => {
-                  const lx = activeLampSnap.x + (isLampDragging ? lampDragOffset.x : 0)
-                  const ly = activeLampSnap.y + (isLampDragging ? lampDragOffset.y : 0)
-                  const drawY = ly + 20 // Shift all drawing Y coordinates down by +20px to anchor base squarely over crosshairs
-                  // Light source: bottom of the LED bar running from lx+10 to lx+140 (offset Y by 20px down)
-                  const coneX1 = lx + 10
-                  const coneY1 = drawY - 119
-                  const coneX2 = lx + 140
-                  const coneY2 = drawY - 139
-                  return (
-                    <g style={{ pointerEvents: 'none' }}>
-                      {/* Wide warm translucent light cone fanning downward from LED bar underside */}
-                      <polygon
-                        points={`${coneX1},${coneY1} ${coneX2},${coneY2} ${lx + 260},${drawY + 40} ${lx - 100},${drawY + 40}`}
-                        fill="rgba(255, 220, 120, 0.12)"
-                        filter="url(#lamp-glow-blur)"
-                      />
-                      {/* Inner bright core cone for depth */}
-                      <polygon
-                        points={`${lx + 25},${drawY - 121} ${lx + 125},${drawY - 137} ${lx + 190},${drawY + 10} ${lx - 30},${drawY + 10}`}
-                        fill="rgba(255, 230, 140, 0.14)"
-                        filter="url(#lamp-glow-blur)"
-                      />
-                      {/* Soft warm glow pool on the desk surface */}
-                      <ellipse
-                        cx={lx + 80}
-                        cy={drawY + 30}
-                        rx="180"
-                        ry="25"
-                        fill="rgba(255, 210, 100, 0.18)"
-                        filter="url(#lamp-glow-blur)"
-                      />
-                    </g>
-                  )
-                })()}
+                {/* --- Phase 3: Lamp warm light cone removed (now handled by global lighting overlay) --- */}
 
                 {/* Structured Grid of 6 Snap Points (Top row of 3, Bottom row of 3) */}
                 {closeUpSnapPoints.map((pt) => (
@@ -1202,6 +1224,11 @@ function App() {
 
                   return (
                     <g
+                      onClick={() => {
+                        if (!lampHasDraggedRef.current) {
+                          setIsNightMode(!isNightMode)
+                        }
+                      }}
                       onPointerDown={handleLampPointerDown}
                       onPointerMove={handleLampPointerMove}
                       onPointerUp={handleLampPointerUp}
