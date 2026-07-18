@@ -67,6 +67,27 @@ function App() {
   const plantDragStartRef = useRef({ x: 0, y: 0 })
   const [plantDragOffset, setPlantDragOffset] = useState({ x: 0, y: 0 })
 
+  // --- Phase 5: Window Persistent Global State ---
+  // Default to wall snap index 0 (W-Left)
+  const [savedWindowPosition, setSavedWindowPosition] = useState(0)
+
+  // --- Phase 5: Window Drag State (operates on room viewport, not zoom SVG) ---
+  const [isDraggingWindow, setIsDraggingWindow] = useState(false)
+  const windowHasDraggedRef = useRef(false)
+  const windowDragStartRef = useRef({ x: 0, y: 0 })
+  const [windowDragDelta, setWindowDragDelta] = useState({ x: 0, y: 0 })
+
+  // Wall snap points — percentage-based positions on the back wall
+  const WALL_SNAPS = [
+    { id: 'W-Left',  top: 33.75, left: 35 },
+    { id: 'W-Right', top: 33.75, left: 65 },
+  ]
+
+  // --- Phase 5: Window theme variables (swap later for day/night) ---
+  const windowSkyColor   = '#D3E3FD'  // morning blue
+  const windowCloudColor = '#F5F2E9'  // warm cream
+  const windowSunColor   = 'rgba(255,220,120,0.35)'
+
   // ── Normalized Snap Grid ──────────────────────────────────────────────────
   // Each snap point is defined as (xFrac, yFrac) where:
   //   xFrac  0.0 = left edge of tabletop,  1.0 = right edge
@@ -325,6 +346,57 @@ function App() {
     setPlantDragOffset({ x: 0, y: 0 })
   }, [isPlantDragging, plantPosition, plantDragOffset, closeUpSnapPoints])
 
+  // --- Phase 5: Window Drag Handlers (operates on room viewport, not zoom SVG) ---
+  const handleWindowPointerDown = useCallback((event) => {
+    event.preventDefault()
+    event.stopPropagation()
+    event.currentTarget.setPointerCapture(event.pointerId)
+    setIsDraggingWindow(true)
+    windowHasDraggedRef.current = false
+    windowDragStartRef.current = { x: event.clientX, y: event.clientY }
+    setWindowDragDelta({ x: 0, y: 0 })
+  }, [])
+
+  const handleWindowPointerMove = useCallback((event) => {
+    if (!isDraggingWindow) return
+    event.preventDefault()
+    event.stopPropagation()
+    windowHasDraggedRef.current = true
+    setWindowDragDelta({
+      x: event.clientX - windowDragStartRef.current.x,
+      y: event.clientY - windowDragStartRef.current.y,
+    })
+  }, [isDraggingWindow])
+
+  const handleWindowPointerUp = useCallback((event) => {
+    if (!isDraggingWindow) return
+    event.preventDefault()
+    event.stopPropagation()
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId)
+    }
+    if (windowHasDraggedRef.current) {
+      // Convert current rendered position to room percentages and snap
+      const roomRect = roomRef.current?.getBoundingClientRect()
+      if (roomRect) {
+        const currentSnap = WALL_SNAPS[savedWindowPosition]
+        const renderedLeftPx = (currentSnap.left / 100) * roomRect.width + windowDragDelta.x
+        const renderedLeftPct = (renderedLeftPx / roomRect.width) * 100
+        // Find nearest wall snap point by horizontal distance
+        let nearestIdx = 0
+        let shortestDist = Number.POSITIVE_INFINITY
+        WALL_SNAPS.forEach((wp, idx) => {
+          const dist = Math.abs(renderedLeftPct - wp.left)
+          if (dist < shortestDist) { shortestDist = dist; nearestIdx = idx }
+        })
+        setSavedWindowPosition(nearestIdx)
+      }
+    }
+    setIsDraggingWindow(false)
+    windowHasDraggedRef.current = false
+    setWindowDragDelta({ x: 0, y: 0 })
+  }, [isDraggingWindow, savedWindowPosition, windowDragDelta, WALL_SNAPS])
+
   // --- Phase 4: Note Modal Handlers ---
   const handleNoteModalSave = useCallback(() => {
     setSavedBookText(currentBookText)
@@ -470,6 +542,64 @@ function App() {
           <line x1="20%" y1="47.5%" x2="80%" y2="47.5%" stroke="#dca796" strokeWidth="1" strokeDasharray="4" />
           <line x1="50%" y1="20%" x2="50%" y2="75%" stroke="#dca796" strokeWidth="1" strokeDasharray="4" />
         </svg>
+
+        {/* --- Phase 5: Draggable Window Asset on the Back Wall --- */}
+        <div
+          onPointerDown={handleWindowPointerDown}
+          onPointerMove={handleWindowPointerMove}
+          onPointerUp={handleWindowPointerUp}
+          onPointerCancel={handleWindowPointerUp}
+          style={{
+            position: 'absolute',
+            top: `${WALL_SNAPS[savedWindowPosition].top}%`,
+            left: `${WALL_SNAPS[savedWindowPosition].left}%`,
+            width: '13%',
+            aspectRatio: '9 / 10',
+            transform: `translate(-50%, -50%) translate(${windowDragDelta.x}px, ${windowDragDelta.y}px)`,
+            zIndex: 12,
+            touchAction: 'none',
+            cursor: isDraggingWindow ? 'grabbing' : 'grab',
+            overflow: 'hidden',
+          }}
+        >
+          <svg viewBox="0 0 180 200" width="100%" height="100%">
+            {/* ── WINDOW FRAME (outer) ── */}
+            <rect x="4" y="4" width="172" height="172" rx="5" fill="#E8D5B5" stroke="#5C4B3F" strokeWidth="5" strokeLinejoin="round" />
+
+            {/* ── SKY PANES (4 quadrants, expanded to fill space freed by slim muntins) ── */}
+            <rect x="14" y="12" width="72" height="76" rx="3" fill={windowSkyColor} />
+            <rect x="94" y="12" width="72" height="76" rx="3" fill={windowSkyColor} />
+            <rect x="14" y="96" width="72" height="74" rx="3" fill={windowSkyColor} />
+            <rect x="94" y="96" width="72" height="74" rx="3" fill={windowSkyColor} />
+
+            {/* ── MORNING SUN GLOW (top-right pane) ── */}
+            <circle cx="148" cy="28" r="18" fill={windowSunColor} />
+            <circle cx="148" cy="28" r="10" fill="rgba(255,235,160,0.5)" />
+
+            {/* ── CLOUDS ── */}
+            {/* Cloud 1: top-left pane */}
+            <ellipse cx="38" cy="52" rx="16" ry="7" fill={windowCloudColor} opacity="0.9" />
+            <ellipse cx="52" cy="50" rx="12" ry="6" fill={windowCloudColor} opacity="0.85" />
+            <ellipse cx="44" cy="48" rx="10" ry="5" fill={windowCloudColor} opacity="0.95" />
+
+            {/* Cloud 2: top-right pane */}
+            <ellipse cx="118" cy="58" rx="14" ry="6" fill={windowCloudColor} opacity="0.85" />
+            <ellipse cx="130" cy="56" rx="10" ry="5" fill={windowCloudColor} opacity="0.9" />
+
+            {/* Cloud 3: bottom-left pane */}
+            <ellipse cx="52" cy="128" rx="13" ry="5.5" fill={windowCloudColor} opacity="0.8" />
+            <ellipse cx="42" cy="126" rx="9" ry="4.5" fill={windowCloudColor} opacity="0.85" />
+
+            {/* ── CROSSBAR MUNTINS (slim, delicate, drawn on top of panes) ── */}
+            <rect x="86" y="8" width="8" height="164" rx="2" fill="#E8D5B5" stroke="#5C4B3F" strokeWidth="1.5" />
+            <rect x="8" y="88" width="164" height="8" rx="2" fill="#E8D5B5" stroke="#5C4B3F" strokeWidth="1.5" />
+
+            {/* ── WINDOW SILL ── */}
+            <rect x="-2" y="174" width="184" height="14" rx="4" fill="#E8D5B5" stroke="#5C4B3F" strokeWidth="4" />
+            {/* Sill highlight */}
+            <line x1="6" y1="177" x2="174" y2="177" stroke="#ffffff" strokeWidth="1.5" opacity="0.5" />
+          </svg>
+        </div>
 
         <div
           className="table-asset"
